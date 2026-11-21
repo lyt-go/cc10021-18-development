@@ -200,6 +200,17 @@ export const MODULES: ModuleMeta[] = [
     actionTargets: {"标记下降": "下降趋势", "标记需关注": "需关注", "标记已改善": "已改善"},
     metrics: ["趋势记录总数", "下降趋势记录", "需关注记录"],
   },
+  {
+    key: "exchange_snapshot",
+    name: "目录交换快照",
+    entity: "交换快照",
+    desc: "支撑数据表目录跨环境交接的结构导入导出，留存源端字段类型与适配说明，同一文件只保留一个有效结构。",
+    fields: ["快照编号", "快照名称", "源环境", "目标环境", "表名称", "文件指纹", "导入批次", "字段总数", "已适配字段", "未解决字段", "导入时间", "状态"],
+    statuses: ["已导入", "存在未解决项", "已重试", "已核对"],
+    actions: [],
+    actionTargets: {},
+    metrics: ["交换快照总数", "存在未解决项", "已核对快照"],
+  },
 ]
 
 export const MODULE_BY_KEY: Map<string, ModuleMeta> = new Map(

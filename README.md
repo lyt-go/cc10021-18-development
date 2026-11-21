@@ -69,6 +69,28 @@ npm run dev
 | 主数据实体注册 | `mdm_entity` | 主数据实体 | 实体编号、实体名称、业务域 |
 | 质量趋势看板 | `dq_trend` | 趋势记录 | 记录编号、目标表名、日期 |
 
+## 目录交换快照（跨环境结构交接）
+
+数据表目录支持跨环境的表字段导入导出，服务位于 `app/services/exchange_snapshot.py`，
+接口前缀 `/api/table_catalog/exchange`：
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/snapshots/export?table_name=` | GET | 导出带源类型的目录交换快照 JSON（含带时区时间戳列） |
+| `/snapshots/import` | POST | 把快照导入为目录有效结构，按文件内容指纹幂等 |
+| `/snapshots/{id}/retry` | POST | 对类型转换失败字段按人工裁定目标类型重试，未解决列保留 |
+| `/snapshots/{id}/reconcile` | GET | 按次核对快照源类型与目录/画像登记字段 |
+
+关键规则：
+
+- 同一文件（内容指纹相同）重复或并发导入只产生一个有效结构（导入锁 + 指纹去重）。
+- 源端 `TIMESTAMP WITH TIME ZONE` 适配为目标库无时区 `DATE`，字段登记保留
+  `原始字段类型` 与 `适配说明`；其他可对应列原样登记。
+- 转换失败的字段进入未解决清单，不阻断导入、不进入画像，可携带目标类型重试。
+- 适配结论回写 `metadata_diff` 待核清单（关联快照编号与导入批次）；
+  按次核对后回写「核对一致/不一致」，核对记录可按批次追溯。
+- 只有成功适配并登记到目录的字段才会进入字段画像（`column_profile`）消费。
+
 ## 约定
 
 - 全部模块共享`frontend/src/views/WorkbenchView.vue|tsx`和一套资源路由。

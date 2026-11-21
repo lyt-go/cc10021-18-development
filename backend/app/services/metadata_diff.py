@@ -116,6 +116,96 @@ class MetadataDiffService(BaseModuleService):
             lr["abnormal"] = True
             lr["status"] = "待校验"
 
+    # ------------------------------------------------------------------
+    # 目录交换快照：适配结论回写待核清单 + 按次核对
+    # ------------------------------------------------------------------
+    def record_adaptation_review(self, table_name: str, batch_hash: str,
+                                  snapshot_id: str,
+                                  adaptation_details: list[dict[str, Any]]) -> int:
+        """把快照导入的类型适配结论回写到元数据变更待核清单。
+
+        每个字段一条待核记录：成功适配的标记为「待核」（等待人工/按次核对确认），
+        类型转换失败的标记为「适配失败」并置为异常待处理，二者都关联目录交换快照
+        编号与导入批次，供后续按次核对。
+        """
+        diff_rows = store.rows(self.MODULE)
+        written = 0
+        for detail in adaptation_details:
+            new_did = max((int(r.get("id", 0)) for r in diff_rows), default=0) + 1
+            resolved = bool(detail.get("是否解决"))
+            diff_rows.append({
+                "id": new_did,
+                "变更编号": f"META-{new_did:04d}",
+                "变更对象": f"{table_name}.{detail.get('字段名称', '')}",
+                "变更类型": "类型适配" if resolved else "适配失败",
+                "旧值": f"源类型:{detail.get('原始字段类型', '')}",
+                "新值": f"目标类型:{detail.get('目标字段类型', '')}" if resolved
+                else f"未解决:{detail.get('失败原因', '')}",
+                "变更批次": batch_hash,
+                "来源快照": snapshot_id,
+                "关联表名": table_name,
+                "字段名称": detail.get("字段名称", ""),
+                "原始字段类型": detail.get("原始字段类型", ""),
+                "目标字段类型": detail.get("目标字段类型", ""),
+                "适配说明": detail.get("适配说明", ""),
+                "核对结论": "待核" if resolved else "适配失败",
+                "影响评估": self._assess_impact(
+                    "类型变更" if resolved else "适配失败",
+                    table_name, detail.get("字段名称", "")),
+                "变更时间": datetime.now(timezone.utc).isoformat(),
+                "status": "待核" if resolved else "待审核",
+                "pending": True,
+                "abnormal": not resolved,
+            })
+            written += 1
+        return written
+
+    def resolve_review_item(self, table_name: str, batch_hash: str,
+                             field_name: str, target_type: str,
+                             note: str = "") -> dict[str, Any] | None:
+        """重试适配成功后，回写待核清单中对应字段的结论。"""
+        for row in store.rows(self.MODULE):
+            if (row.get("变更批次") == batch_hash
+                    and row.get("关联表名") == table_name
+                    and row.get("字段名称") == field_name
+                    and row.get("核对结论") == "适配失败"):
+                row["变更类型"] = "类型适配"
+                row["新值"] = f"目标类型:{target_type}"
+                row["目标字段类型"] = target_type
+                row["适配说明"] = note or row.get("适配说明", "")
+                row["核对结论"] = "待核"
+                row["影响评估"] = self._assess_impact("类型变更", table_name, field_name)
+                row["status"] = "待核"
+                row["pending"] = True
+                row["abnormal"] = False
+                return row
+        return None
+
+    def reconcile_review_batch(self, batch_hash: str,
+                                checks: list[dict[str, Any]]) -> dict[str, Any]:
+        """按次核对完成后，把核对结论回写到同一导入批次的待核清单。"""
+        diff_rows = store.rows(self.MODULE)
+        index = {
+            (r.get("关联表名"), r.get("字段名称")): r
+            for r in diff_rows if r.get("变更批次") == batch_hash
+        }
+        updated = 0
+        for check in checks:
+            row = index.get((check.get("表名称"), check.get("字段名称")))
+            if row is None:
+                continue
+            row["核对结论"] = "核对一致" if check.get("一致") else "核对不一致"
+            if check.get("一致"):
+                row["status"] = "已确认"
+                row["pending"] = False
+                row["abnormal"] = False
+            else:
+                row["status"] = "待审核"
+                row["pending"] = True
+                row["abnormal"] = True
+            updated += 1
+        return {"导入批次": batch_hash, "回写记录数": updated}
+
     def domain_snapshot(self) -> dict[str, Any]:
         snapshot = super().domain_snapshot()
         snapshot["operation"] = "校验"
